@@ -17,6 +17,7 @@ using System.IO.Compression;
 using Core.CredPopper;
 using Core.WindowsInternals;
 using System.Collections;
+using System.Text.RegularExpressions;
 
 namespace Core
 {
@@ -1821,54 +1822,240 @@ namespace Core
         }
 
         [CoreDispatch(Description = "Makes a web request like the curl command",
-            Usage = "Usage: curl https://www.google.co.uk <domain-front-header-optional> <proxy-optional> <proxy-user-optional> <proxy-pass-optional> <user-agent-optional>")]
+            Usage = "Usage: curl <--method> GET|POST <--domain-front-address> <--proxy-address> <--proxy-user> <--proxy-pass> <--username> <--password> <--digest> <--basic> <--body> <--useragent> <--cookie> <--header> (--url) https://www.google.co.uk")]
         public static void Curl(string[] args)
         {
             try
             {
-                Console.WriteLine($"[>] Trying to load URL {args[1]}");
+                if (args.Length <= 1)
+                {
+                    throw new ApplicationException("No arguments found!");
+                }
+                string url = null;
+                string method = null;
+                string domainFrontUrl = null;
+                string proxyAddress = null;
+                string proxyUser = null;
+                string proxyPass = null;
+                string username = null;
+                string password = null;
+                string body = null;
+                string cookie = null;
+                Dictionary<string, string> headers = null;
+                string useragent = null;
+                bool digestAuth = false;
+                bool verbose = false;
+                for (int i = 0; i < args.Length; i++)
+                {
+                    if (args[i].StartsWith("--"))
+                    {
+                        var argument = args[i];
+                        switch (argument)
+                        {
+                            case "--url":
+                                url = args[i + 1];
+                                i++;
+                                break;
+                            case "--method":
+                                method = args[i + 1];
+                                if (method != null)
+                                {
+                                    method = method.ToUpper();
+                                    if (!(new List<string> { "POST", "GET" }.Any(val => val == method)))
+                                    {
+                                        throw new ApplicationException($"Request method '{method.ToUpper()}' not recognised!");
+                                    }
+                                }
+                                i++;
+                                break;
+                            case "--domain-front-url":
+                                domainFrontUrl = args[i + 1];
+                                i++;
+                                break;
+                            case "--proxy-address":
+                                proxyAddress = args[i + 1];
+                                i++;
+                                break;
+                            case "--proxy-user":
+                                proxyUser = args[i + 1];
+                                i++;
+                                break;
+                            case "--proxy-pass":
+                                proxyPass = args[i + 1];
+                                i++;
+                                break;
+                            case "--username":
+                                username = args[i + 1];
+                                i++;
+                                break;
+                            case "--password":
+                                password = args[i + 1];
+                                i++;
+                                break;
+                            case "--body":
+                                body = args[i + 1];
+                                if (Regex.IsMatch(body, "^@.*"))
+                                {
+                                    var filePath = body.Substring(1, body.Length - 1);
+                                    // If filepath doesn't begin with a drive letter.
+                                    // Relative path.
+                                    if (!Regex.IsMatch(filePath, "[a-zA-Z]:"))
+                                    {
+                                        filePath = Path.Combine(System.IO.Directory.GetCurrentDirectory(), filePath);
+                                    }
+                                    if (!System.IO.File.Exists(filePath))
+                                    {
+                                        throw new ApplicationException("Body data file not found!");
+                                    }
+                                    body = System.IO.File.ReadAllText(filePath);
+                                }
+                                i++;
+                                break;
+                            case "--cookie":
+                                cookie = args[i + 1];
+                                i++;
+                                break;
+                            case "--header":
+                                if (headers == null)
+                                {
+                                    headers = new Dictionary<string, string>();
+                                }
+                                // Grab argument value from next index location and split on first ':' only.
+                                var header = args[i + 1].Split(new[] { ':' }, 2);
+                                header[0] = header[0].Trim();
+                                header[1] = header[1].Trim();
+                                if (!headers.TryGetValue(header[0], out string headerVal))
+                                {
+                                    // Value for header does not exist. Likely header key doesn't exist.
+                                    headers.Add(header[0], header[1]);
+                                }
+                                else
+                                {
+                                    // Overwriting header key with latest value. This is incase the same header has been used twice.
+                                    headers[header[0]] = header[1];
+                                }
+                                i++;
+                                break;
+                            case "--useragent":
+                                useragent = args[i + 1];
+                                i++;
+                                break;
+                            case "--basic":
+                                break;
+                            case "--digest":
+                                digestAuth = true;
+                                break;
+                            case "--verbose":
+                                verbose = true;
+                                break;
+                            default:
+                                throw new ApplicationException($"Unrecognised argument '{argument}'.");
+                        }
+                    }
+                }
+
+                if (url == null)
+                {
+                    url = args.LastOrDefault();
+                }
+                if (url == null || !Regex.IsMatch(url, @"^[a-z]*://.*$"))
+                {
+                    throw new ApplicationException("Please provide a valid URL!");
+                }
+                if (method == "POST")
+                {
+                    if (string.IsNullOrEmpty(body))
+                    {
+                        throw new ApplicationException("A POST request must have a body.");
+                    }
+                }
+                if (method == null)
+                {
+                    method = "GET";
+                }
 
                 try
                 {
-                    Console.WriteLine("[>] Allowing untrusted certs");
                     ServicePointManager.ServerCertificateValidationCallback = (z, y, x, w) => true;
                 }
                 catch (Exception e)
                 {
                     Console.WriteLine($"[>] Error allowing untrusted certs {e.Message}");
+                    return;
+                }
+
+                if (verbose)
+                {
+                    Console.WriteLine($"[Request]");
+                    Console.WriteLine("[>] Allowing untrusted certs");
+                    Console.WriteLine($"[>] URL: {url}");
+                    Console.WriteLine($"[>] Method: {method}");
+                    if (!string.IsNullOrEmpty(username))
+                    {
+                        var authMethod = "Basic";
+                        if (digestAuth)
+                        {
+                            authMethod = "Digest";
+                        }
+                        Console.WriteLine($"[>] Authentication: {authMethod}");
+                    }
+                    if (!string.IsNullOrEmpty(proxyAddress))
+                    {
+                        Console.WriteLine($"[>] Proxy: {proxyAddress}");
+                    }
+                    if (!string.IsNullOrEmpty(cookie))
+                    {
+                        Console.WriteLine($"[>] Cookie: {cookie}");
+                    }
+                    if (!string.IsNullOrEmpty(useragent))
+                    {
+                        Console.WriteLine($"[>] Useragent: {useragent}");
+                    }
+                    if (headers != null)
+                    {
+                        foreach (var header in headers)
+                        {
+                            Console.WriteLine($"[>] Header: {header.Key}:{header.Value}");
+                        }
+                    }
+                    if (!string.IsNullOrEmpty(body))
+                    {
+                        Console.WriteLine($"\n{body}");
+                    }
                 }
 
                 string html = null;
-                if (args.Length == 2)
+                using (var curlObject = Common.WebRequest.Curl(
+                     url: url,
+                     df: domainFrontUrl,
+                     purl: proxyAddress,
+                     proxyUser: proxyUser,
+                     proxyPassword: proxyPass,
+                     username: username,
+                     password: password,
+                     digestAuth: digestAuth,
+                     cookie: cookie,
+                     headers: headers,
+                     useragent: useragent))
                 {
-                    html = Common.WebRequest.Curl().DownloadString(args[1]);
+                    if (method == "POST")
+                    {
+                        html = curlObject.UploadString(url, body);
+                    }
+                    else
+                    {
+                        html = curlObject.DownloadString(url);
+                    }
+                    if (verbose)
+                    {
+                        Console.WriteLine($"\n[Response]");
+                    }
                 }
-                else if (args.Length == 3)
-                {
-                    html = Common.WebRequest.Curl(args[2]).DownloadString(args[1]);
-                }
-                else if (args.Length == 4)
-                {
-                    html = Common.WebRequest.Curl(args[2], args[3]).DownloadString(args[1]);
-                }
-                else if (args.Length == 5)
-                {
-                    html = Common.WebRequest.Curl(args[2], args[3], args[4]).DownloadString(args[1]);
-                }
-                else if (args.Length == 6)
-                {
-                    html = Common.WebRequest.Curl(args[2], args[3], args[4], args[5]).DownloadString(args[1]);
-                }
-                else if (args.Length == 7)
-                {
-                    html = Common.WebRequest.Curl(args[2], args[3], args[4], args[5], args[6]).DownloadString(args[1]);
-                }
-
                 Console.WriteLine(html);
             }
             catch (Exception e)
             {
-                Console.WriteLine($"[-] Error trying to load URL: {e}");
+                Console.WriteLine($"[-] Error trying to load request: {e}");
             }
         }
         //////////////////////////////////
